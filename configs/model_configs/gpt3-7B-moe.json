@@ -1,0 +1,23 @@
+{   
+    "model_name": "GPT3-7B-MoE",
+    "model_params_b": 7,
+    "model_vocab_size": 50304,
+    "model_n_layer": 1,
+    "model_n_head": 32,
+    "model_n_embd": 4096,
+    "n_tp": 4,
+    "n_pp": 1,
+    "moe_enabled": true,
+    "num_experts": 64,
+    "experts_per_token": 2,
+    "expert_capacity_factor": 1.25,
+    "expert_load_imbalance": true,
+    "expert_load_skew": 0.8,
+    "moe_ffn_scaling": "balanced",
+    "moe_offchip_experts": true,
+    "expert_load_latency": 5000,
+    "expert_cache_size": 8,
+    "moe_enable_parallelism": true,
+    "moe_enable_double_buffering": true
+}
+

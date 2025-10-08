@@ -24,6 +24,23 @@ struct SimulationConfig {
     uint32_t model_n_layer;
     uint32_t model_n_head;
     uint32_t model_n_embd;
+    
+    // MoE config
+    bool moe_enabled;
+    uint32_t num_experts;
+    uint32_t experts_per_token;
+    double expert_capacity_factor;
+    bool expert_load_imbalance;  // Enable realistic load skew
+    double expert_load_skew;     // Skew factor (0.8 = 80% to top 5% experts)
+    std::string moe_ffn_scaling; // FFN width scaling: "balanced", "compute", "capacity"
+    bool moe_offchip_experts;    // Experts stored in HBM (not on-chip)
+    uint32_t expert_load_latency; // Cycles to load one expert from HBM to SRAM
+    uint32_t expert_cache_size;  // Number of experts that fit in on-chip cache
+    bool moe_enable_parallelism; // Enable parallel expert execution
+    bool moe_enable_double_buffering; // Overlap param load and compute
+    
+    // Helper function to calculate scaled expert FFN dimension
+    uint32_t get_expert_ffn_dim() const;  // Implemented in Common.cc
 
     /* Custom Config */
     RunMode run_mode;  // NPU

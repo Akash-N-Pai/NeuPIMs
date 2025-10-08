@@ -6,6 +6,8 @@
 #include "Common.h"
 #include "Logger.h"
 #include "Model.h"
+#include "MoETokenDispatcher.h"
+#include "MoEExecution.h"
 #include "Stat.h"
 #include "operations/Operation.h"
 #include "tensor/BTensor.h"
@@ -57,4 +59,5 @@ class StageProgram {
     std::vector<Ptr<BTensor>> ffn1_block(std::vector<Ptr<BTensor>> inputs);
     std::vector<Ptr<BTensor>> ffn2_block(std::vector<Ptr<BTensor>> inputs);
     std::vector<Ptr<BTensor>> qkv_gen_block(std::vector<Ptr<BTensor>> inputs);
+    std::vector<Ptr<BTensor>> moe_ffn_block(std::vector<Ptr<BTensor>> inputs);
 };

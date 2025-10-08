@@ -245,6 +245,27 @@ void initialize_client_config(std::string cli_config_path) {
     // Config::global_config.request_total_cnt = cli_config["request_total_cnt"];
 }
 
+uint32_t SimulationConfig::get_expert_ffn_dim() const {
+    if (!moe_enabled) return 4 * model_n_embd / n_tp;  // Dense FFN
+    
+    uint32_t d_ff_dense = 4 * model_n_embd / n_tp;
+    
+    if (moe_ffn_scaling == "balanced") {
+        // Parameter-balanced: total params ≈ dense FFN params
+        return d_ff_dense / num_experts;
+    } else if (moe_ffn_scaling == "compute") {
+        // Compute-balanced: moderate scaling
+        return d_ff_dense / (uint32_t)std::sqrt(num_experts);
+    } else if (moe_ffn_scaling == "capacity") {
+        // Full capacity: each expert same width as dense FFN
+        return d_ff_dense;
+    } else {
+        // Default to balanced
+        spdlog::warn("Unknown moe_ffn_scaling '{}', defaulting to 'balanced'", moe_ffn_scaling);
+        return d_ff_dense / num_experts;
+    }
+}
+
 void initialize_model_config(std::string model_config_path) {
     json model_config = load_config(model_config_path);
     /* GPT configs */
@@ -256,6 +277,19 @@ void initialize_model_config(std::string model_config_path) {
     Config::global_config.model_n_embd = model_config["model_n_embd"];
     /* parallelism config */
     Config::global_config.n_tp = model_config["n_tp"];
+    /* MoE configs */
+    Config::global_config.moe_enabled = model_config.value("moe_enabled", false);
+    Config::global_config.num_experts = model_config.value("num_experts", 1);
+    Config::global_config.experts_per_token = model_config.value("experts_per_token", 1);
+    Config::global_config.expert_capacity_factor = model_config.value("expert_capacity_factor", 1.0);
+    Config::global_config.expert_load_imbalance = model_config.value("expert_load_imbalance", false);
+    Config::global_config.expert_load_skew = model_config.value("expert_load_skew", 0.0);
+    Config::global_config.moe_ffn_scaling = model_config.value("moe_ffn_scaling", std::string("balanced"));
+    Config::global_config.moe_offchip_experts = model_config.value("moe_offchip_experts", true);
+    Config::global_config.expert_load_latency = model_config.value("expert_load_latency", 1000);
+    Config::global_config.expert_cache_size = model_config.value("expert_cache_size", 8);
+    Config::global_config.moe_enable_parallelism = model_config.value("moe_enable_parallelism", true);
+    Config::global_config.moe_enable_double_buffering = model_config.value("moe_enable_double_buffering", true);
 }
 void initialize_system_config(std::string sys_config_path) {
     json sys_config = load_config(sys_config_path);

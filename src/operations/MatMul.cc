@@ -162,10 +162,17 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
     // region using bias load
     if (_inputs.size() == 3 && K == 0) {
         auto bias_tensor = std::static_pointer_cast<NPUTensor>(_inputs[2]);
-        for (uint32_t n_inner_offset = 0; n_inner_offset < n_inner; n_inner_offset += loop_size) {
+        uint32_t bias_size = bias_tensor->get_dims()[0];
+        
+        // Clamp n_inner to actual bias size to handle small expert FFN dimensions
+        uint32_t effective_n_inner = std::min(n_inner, bias_size);
+        
+        for (uint32_t n_inner_offset = 0; n_inner_offset < effective_n_inner; n_inner_offset += loop_size) {
             // n_inner_offset: L1 tile start index in each L2 tile
             std::vector<addr_type> bias_addrs;
-            for (uint32_t n_loop = 0; n_loop < loop_size; ++n_loop) {
+            uint32_t remaining = std::min(loop_size, effective_n_inner - n_inner_offset);
+            
+            for (uint32_t n_loop = 0; n_loop < remaining; ++n_loop) {
                 // get address by get_addr
                 auto bias_addr = bias_tensor->get_addr({n_outer_offset + n_inner_offset + n_loop});
                 if (bias_addr != GARBAGE_ADDR) {

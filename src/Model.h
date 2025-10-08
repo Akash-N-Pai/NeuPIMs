@@ -13,6 +13,10 @@
 #include "operations/LayerNorm.h"
 #include "operations/MatMul.h"
 #include "operations/Microbench.h"
+#include "operations/MoERouter.h"
+#include "operations/MoEExpert.h"
+#include "operations/MoECombine.h"
+#include "operations/ExpertParamLoad.h"
 #include "operations/NeuPIMSAttend.h"
 #include "operations/NeuPIMSLogitSoftmax.h"
 #include "operations/Operation.h"
@@ -62,6 +66,11 @@ extern std::string Attention;
 extern std::string NeuPIMSAttend;
 extern std::string FusedMHA;
 extern std::string PIMGEMV;
+
+// MoE operations
+extern std::string MoERouter;
+extern std::string MoEExpert;
+extern std::string MoECombine;
 }  // namespace OperationType
 
 namespace ParameterType {

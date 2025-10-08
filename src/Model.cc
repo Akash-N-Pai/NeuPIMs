@@ -33,6 +33,11 @@ std::string Microbench = "Microbench";
 std::string NeuPIMSAttend = "NeuPIMSAttend";
 std::string FusedMHA = "FusedMHA";
 std::string PIMGEMV = "PIMGEMV";
+
+// MoE operations
+std::string MoERouter = "moe_router";
+std::string MoEExpert = "moe_expert";
+std::string MoECombine = "moe_combine";
 }  // namespace OperationType
 
 namespace ParameterType {
@@ -87,14 +92,44 @@ void Model::init_params() {
                       {_config.model_n_embd});
         create_weight(name_gen(ffn, OperationType::LayerNorm, ParameterType::Bias),
                       {_config.model_n_embd});
-        create_weight(name_gen(ffn, OperationType::FullyConnected1, ParameterType::Weight),
-                      {_config.model_n_embd, 4 * _config.model_n_embd / _config.n_tp});
-        create_weight(name_gen(ffn, OperationType::FullyConnected1, ParameterType::Bias),
-                      {4 * _config.model_n_embd / _config.n_tp});
-        create_weight(name_gen(ffn, OperationType::FullyConnected2, ParameterType::Weight),
-                      {4 * _config.model_n_embd / _config.n_tp, _config.model_n_embd});
-        create_weight(name_gen(ffn, OperationType::FullyConnected2, ParameterType::Bias),
-                      {_config.model_n_embd});
+        
+        if (_config.moe_enabled) {
+            // MoE: Create router weights (no bias - routers typically don't use bias)
+            create_weight(name_gen(ffn, OperationType::MoERouter, ParameterType::Weight),
+                          {_config.model_n_embd, _config.num_experts});
+            
+            // Calculate scaled expert FFN dimension based on scaling mode
+            uint32_t d_ff_expert = _config.get_expert_ffn_dim();
+            
+            spdlog::info("MoE FFN Scaling: mode='{}', d_ff_expert={} (dense d_ff={})",
+                         _config.moe_ffn_scaling, d_ff_expert, 
+                         4 * _config.model_n_embd / _config.n_tp);
+            
+            // MoE: Create per-expert weights with scaled FFN dimension
+            for (uint32_t expert_id = 0; expert_id < _config.num_experts; ++expert_id) {
+                auto expert = name_gen(ffn, OperationType::MoEExpert, std::to_string(expert_id));
+                // FC1: [d_model, d_ff_expert]
+                create_weight(name_gen(expert, OperationType::FullyConnected1, ParameterType::Weight),
+                              {_config.model_n_embd, d_ff_expert});
+                create_weight(name_gen(expert, OperationType::FullyConnected1, ParameterType::Bias),
+                              {d_ff_expert});
+                // FC2: [d_ff_expert, d_model]
+                create_weight(name_gen(expert, OperationType::FullyConnected2, ParameterType::Weight),
+                              {d_ff_expert, _config.model_n_embd});
+                create_weight(name_gen(expert, OperationType::FullyConnected2, ParameterType::Bias),
+                              {_config.model_n_embd});
+            }
+        } else {
+            // Dense FFN: Create standard fc1/fc2 weights
+            create_weight(name_gen(ffn, OperationType::FullyConnected1, ParameterType::Weight),
+                          {_config.model_n_embd, 4 * _config.model_n_embd / _config.n_tp});
+            create_weight(name_gen(ffn, OperationType::FullyConnected1, ParameterType::Bias),
+                          {4 * _config.model_n_embd / _config.n_tp});
+            create_weight(name_gen(ffn, OperationType::FullyConnected2, ParameterType::Weight),
+                          {4 * _config.model_n_embd / _config.n_tp, _config.model_n_embd});
+            create_weight(name_gen(ffn, OperationType::FullyConnected2, ParameterType::Bias),
+                          {_config.model_n_embd});
+        }
     }
     // LM head: both encoder, decoder are GEMV
     create_weight(name_gen(OperationType::LmHead, ParameterType::Weight),
@@ -106,7 +141,48 @@ void Model::init_params() {
         _wgt_size += tensor->_inners[0]->_size;
         // spdlog::info("{}: {}", tensor->get_name(), tensor->get_size());
     }
-    spdlog::info("Total weight size: {}", _wgt_size);
+    spdlog::info("Total weight size: {} bytes ({:.2f} MB)", _wgt_size, _wgt_size / (1024.0 * 1024.0));
+    
+    if (_config.moe_enabled) {
+        spdlog::info("========== MoE Parameter Count ==========");
+        spdlog::info("Num experts: {}, top-{} routing", _config.num_experts, _config.experts_per_token);
+        spdlog::info("FFN scaling mode: '{}'", _config.moe_ffn_scaling);
+        
+        uint32_t d_model = _config.model_n_embd;
+        uint32_t d_ff_expert = _config.get_expert_ffn_dim();
+        uint32_t d_ff_dense = 4 * d_model / _config.n_tp;
+        
+        // Per-layer parameter counts
+        uint64_t attn_params = (d_model * 3 * d_model / _config.n_tp) + (d_model / _config.n_tp * d_model);
+        uint64_t router_params = d_model * _config.num_experts;
+        uint64_t expert_params = 2 * d_model * d_ff_expert;  // FC1 + FC2
+        uint64_t all_experts_params = expert_params * _config.num_experts;
+        uint64_t moe_ffn_params = router_params + all_experts_params;
+        uint64_t layer_params = attn_params + moe_ffn_params;
+        
+        // For comparison: dense FFN
+        uint64_t dense_ffn_params = 2 * d_model * d_ff_dense;
+        
+        spdlog::info("Per-layer breakdown:");
+        spdlog::info("  Attention: {:.2f}M params", attn_params / 1e6);
+        spdlog::info("  MoE Router: {:.2f}M params", router_params / 1e6);
+        spdlog::info("  Per expert: {:.2f}M params (d_ff_expert={})", expert_params / 1e6, d_ff_expert);
+        spdlog::info("  All {} experts: {:.2f}M params", _config.num_experts, all_experts_params / 1e6);
+        spdlog::info("  Total MoE FFN: {:.2f}M params", moe_ffn_params / 1e6);
+        spdlog::info("  Total layer: {:.2f}M params", layer_params / 1e6);
+        spdlog::info("");
+        spdlog::info("Comparison with dense FFN:");
+        spdlog::info("  Dense FFN: {:.2f}M params (d_ff={})", dense_ffn_params / 1e6, d_ff_dense);
+        spdlog::info("  MoE FFN ratio: {:.2f}×", (double)moe_ffn_params / dense_ffn_params);
+        spdlog::info("");
+        spdlog::info("Active parameters per token (top-{}):", _config.experts_per_token);
+        uint64_t active_expert_params = expert_params * _config.experts_per_token;
+        uint64_t active_params = attn_params + router_params + active_expert_params;
+        spdlog::info("  {} experts: {:.2f}M params", _config.experts_per_token, active_expert_params / 1e6);
+        spdlog::info("  Total active: {:.2f}M params", active_params / 1e6);
+        spdlog::info("  Sparse activation: {:.1f}%", 100.0 * active_params / layer_params);
+        spdlog::info("=========================================");
+    }
 }
 
 Ptr<NPUTensor> Model::find_tensor(std::string name) { return _wgt_map[name]; }
