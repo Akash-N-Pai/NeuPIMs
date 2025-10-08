@@ -21,7 +21,8 @@
 class ExpertParamLoad : public Operation {
    public:
     ExpertParamLoad(std::string name, uint32_t expert_id, 
-                    std::vector<Ptr<NPUTensor>> expert_weights);
+                    std::vector<Ptr<NPUTensor>> expert_weights,
+                    Ptr<BTensor> data_tensor);  // The actual data to pass through
 
     std::vector<Ptr<BTensor>> get_outputs(std::vector<Ptr<BTensor>> inputs) override;
 
@@ -29,6 +30,7 @@ class ExpertParamLoad : public Operation {
     uint32_t _expert_id;
     uint64_t _param_size_bytes;  // Total parameter size to load
     uint32_t _load_cycles;       // Cycles needed for transfer
+    Ptr<BTensor> _data_tensor;   // The data tensor to pass through (normalized_input)
     
     void calculate_load_cycles();
     void initialize_tiles();

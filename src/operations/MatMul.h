@@ -13,6 +13,12 @@ class MatMul : public Operation {
 
     std::vector<Ptr<BTensor>> get_outputs(std::vector<Ptr<BTensor>> inputs);
     void set_transposed() { _is_transposed = true; }
+    
+    // MoE optimization: Override number of rows to process (for token slicing)
+    void set_row_count_override(uint32_t row_count) { 
+        _row_count_override = row_count;
+        _use_row_override = true;
+    }
 
     // todo: add attributes
     // currently, values below are dummy.
@@ -31,6 +37,10 @@ class MatMul : public Operation {
     // 3 dimensions, only for n, k, m
     std::vector<uint32_t> _inner_loop;
     std::vector<uint32_t> _outer_loop;
+    
+    // MoE token slicing: override row count for processing subset of batch
+    bool _use_row_override = false;
+    uint32_t _row_count_override = 0;
 
     void calculate_loops();
     void initialize_tiles();

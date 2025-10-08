@@ -12,9 +12,9 @@
     "sram_width": 128,
 
     "process_bit": 32,
-    "vector_core_count": 16,
+    "vector_core_count": 8,
     "vector_core_width": 128,
-    "systolic_array_count": 16,
+    "systolic_array_count": 8,
     "add_latency": 1,
     "mul_latency": 1,
     "exp_latency": 1,

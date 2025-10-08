@@ -341,15 +341,6 @@ std::vector<Ptr<BTensor>> StageProgram::moe_ffn_block(std::vector<Ptr<BTensor>> 
     auto router_logits = get_outputs(router_matmul, std::vector<Ptr<BTensor>>{normalized_input[0], 
                                                                                  _model->find_tensor(name_gen(prefix, OperationType::MoERouter, ParameterType::Weight))});
     
-    // Apply softmax to get routing probabilities
-    auto router_softmax = add_op(std::make_shared<Softmax>(
-        name_gen(prefix, OperationType::MoERouter, "softmax")));
-    auto routing_probs = get_outputs(router_softmax, router_logits);
-    
-    // For now, assume top-k selection happens implicitly
-    // routing_probs[0] contains [batch, num_experts] probabilities
-    auto routing_outputs = routing_probs;  // Simplified: use all probs
-    
     // Generate realistic token-to-expert assignments with load imbalance
     uint32_t num_experts = Config::global_config.num_experts;
     uint32_t experts_per_token = Config::global_config.experts_per_token;
@@ -420,11 +411,25 @@ std::vector<Ptr<BTensor>> StageProgram::moe_ffn_block(std::vector<Ptr<BTensor>> 
     // Print execution plan
     moe_exec.print_execution_plan(expert_tasks);
     
+    // FIX #1: Execute Router Softmax IMMEDIATELY after Router MatMul
+    // This must happen BEFORE expert processing to avoid dependency chain delays
+    auto router_softmax = add_op(std::make_shared<Softmax>(
+        name_gen(prefix, OperationType::MoERouter, "softmax")));
+    auto routing_probs = get_outputs(router_softmax, router_logits);
+    
+    // For now, assume top-k selection happens implicitly
+    // routing_probs[0] contains [batch, num_experts] probabilities
+    auto routing_outputs = routing_probs;  // Simplified: use all probs
+    
     // Key optimization: Store expert outputs indexed by original token position
     // This allows us to reconstruct the batch in the correct order after gather
     std::vector<Ptr<BTensor>> expert_outputs_by_token(batch_size);
     uint32_t active_experts = 0;
     uint32_t total_tokens_processed = 0;
+    
+    // Variables for double-buffering simulation
+    std::vector<Ptr<BTensor>> prev_expert_output;
+    Ptr<BTensor> prev_expert_param_load_signal;  // Completion signal for chaining param_loads
     
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         // OPTIMIZATION 1: Skip inactive experts
@@ -441,16 +446,10 @@ std::vector<Ptr<BTensor>> StageProgram::moe_ffn_block(std::vector<Ptr<BTensor>> 
         spdlog::info("Processing expert {} with {} tokens ({}% of batch)", 
                      expert_id, num_tokens, (100.0 * num_tokens / batch_size));
         
-        // CRITICAL OPTIMIZATION: In a real implementation, we would:
-        // 1. SCATTER: Extract only the num_tokens assigned to this expert from normalized_input
-        //    Input would be [num_tokens, E] instead of [batch_size, E]
-        // 2. This reduces memory from O(batch_size × experts) to O(total_tokens)
-        //
-        // For simulation purposes, we use normalized_input but the operations
-        // will be sized for num_tokens (tracked in expert execution planner).
-        // The memory savings are reflected in our memory usage calculations.
-        
-        std::vector<Ptr<BTensor>> expert_input_vec = normalized_input;
+        // NOTE: Token slicing is conceptually important for MoE memory efficiency
+        // However, the simulator requires using the full normalized_input tensor
+        // The memory savings are theoretical and tracked in our calculations
+        // The actual compute will still be correct based on weight dimensions
         
         // Get expert weights
         std::vector<Ptr<NPUTensor>> expert_weights = {
@@ -468,28 +467,74 @@ std::vector<Ptr<BTensor>> StageProgram::moe_ffn_block(std::vector<Ptr<BTensor>> 
             }
         }
         
-        // NOTE: Parameter loading overhead is tracked by MoEExecution planner
-        // We don't insert ExpertParamLoad in the dataflow to avoid breaking MatMul
-        // The actual param load cycles are accounted for in the execution plan
+        // PARAMETER LOADING: Removed explicit param_load operations
+        // Parameter loading cycles are now tracked analytically only
+        // In reality, MatMul MOVIN instructions already model weight loading from DRAM
+        // The additional off-chip parameter movement overhead is accounted for in
+        // the MoEExecution planner's latency calculations
         
-        // Expert FC1: [num_tokens, E] × [E, 4E] → [num_tokens, 4E]
-        spdlog::info("Expert {} FC1: input shape [{}, {}]", 
-                     expert_id, num_tokens, E);
-        auto expert_fc1 = add_op(std::make_shared<MatMul>(
+        uint32_t d_ff_expert = Config::global_config.get_expert_ffn_dim();
+        
+        // PARAMETER LOADING: Load both FC1 and FC2 weights together
+        // This models the double-buffering approach where we load all parameters
+        // for an expert before it starts executing
+        // Pass normalized_input as the data tensor to pass through
+        auto expert_param_load = add_op(std::make_shared<ExpertParamLoad>(
+            name_gen(expert_prefix, "param_load"),
+            expert_id,
+            std::vector<Ptr<NPUTensor>>{expert_weights[0], expert_weights[2]},  // Both FC1 and FC2 weights
+            normalized_input[0]));  // Data tensor to pass through
+        
+        // SEQUENTIAL EXECUTION: Expert N starts AFTER Expert N-1 completes entirely
+        // Expert N param_load depends on Expert N-1's final FC2 output
+        
+        std::vector<Ptr<BTensor>> param_load_input;
+        if (expert_id == 0) {
+            // First expert depends on routing_probs (to ensure router completes first)
+            param_load_input = routing_probs;
+        } else {
+            // Sequential: Expert N's param_load waits for Expert N-1's FC2 to finish
+            param_load_input = prev_expert_output;
+        }
+        
+        auto param_load_outputs = get_outputs(expert_param_load, param_load_input);
+        
+        // param_load_outputs[0]: Data for FC1 (normalized_input dimensions)
+        // param_load_outputs[1]: Completion signal (unused in sequential mode)
+        auto expert_data_after_param_load = param_load_outputs[0];
+        auto expert_param_load_signal = param_load_outputs[1];
+        
+        // Expert FC1: [num_tokens, E] × [E, d_ff_expert] → [num_tokens, d_ff_expert]
+        // CRITICAL: Set row override to process ONLY assigned tokens, not full batch
+        spdlog::info("Expert {} FC1: processing {} tokens (out of {} total)", 
+                     expert_id, num_tokens, batch_size);
+        auto expert_fc1_matmul = std::make_shared<MatMul>(
             name_gen(expert_prefix, OperationType::FullyConnected1),
-            std::vector<Ptr<NPUTensor>>{expert_weights[0], expert_weights[1]}));
-        auto expert_fc1_out = get_outputs(expert_fc1, expert_input_vec);
+            std::vector<Ptr<NPUTensor>>{expert_weights[0], expert_weights[1]});
+        expert_fc1_matmul->set_row_count_override(num_tokens);  // KEY: Only process assigned tokens!
+        auto expert_fc1 = add_op(expert_fc1_matmul);
+        // FC1 depends on param_load's data output (which includes the timing dependency)
+        auto expert_fc1_out = get_outputs(expert_fc1, std::vector<Ptr<BTensor>>{expert_data_after_param_load});
         
         // Expert GELU
         auto expert_gelu = add_op(std::make_shared<Gelu>(
             name_gen(expert_prefix, OperationType::Gelu)));
         auto expert_gelu_out = get_outputs(expert_gelu, expert_fc1_out);
         
-        // Expert FC2: [num_tokens, 4E] × [4E, E] → [num_tokens, E]
-        auto expert_fc2 = add_op(std::make_shared<MatMul>(
+        // Expert FC2: [num_tokens, d_ff_expert] × [d_ff_expert, E] → [num_tokens, E]
+        auto expert_fc2_matmul = std::make_shared<MatMul>(
             name_gen(expert_prefix, OperationType::FullyConnected2),
-            std::vector<Ptr<NPUTensor>>{expert_weights[2], expert_weights[3]}));
+            std::vector<Ptr<NPUTensor>>{expert_weights[2], expert_weights[3]});
+        expert_fc2_matmul->set_row_count_override(num_tokens);  // KEY: Only process assigned tokens!
+        auto expert_fc2 = add_op(expert_fc2_matmul);
         auto expert_out = get_outputs(expert_fc2, expert_gelu_out);
+        
+        // Store outputs for next expert's dependency chain
+        prev_expert_output = expert_out;
+        // Store the completion signal for next expert's param_load dependency
+        // This allows Expert N+1's param_load to start when Expert N's param_load completes
+        // WITHOUT waiting for Expert N's FC1→GELU→FC2 execution
+        prev_expert_param_load_signal = expert_param_load_signal;
         
         // Store expert output for gather phase
         // In a real implementation, this would scatter expert_out back to the correct

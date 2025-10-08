@@ -401,7 +401,9 @@ cycle_type NeuPIMSystolicWS::get_vector_compute_cycles(Instruction &inst) {
         case Opcode::GELU:
             return vec_op_iter * _config.gelu_latency;
         case Opcode::DUMMY:
-            return 1;
+            // DUMMY can be used for custom cycle delays
+            // If size > 0, use it as the cycle count directly
+            return (inst.size > 0) ? inst.size : 1;
     }
     spdlog::info("not configured operation. {}", inst.id);
     // assert(0);
@@ -429,7 +431,8 @@ void NeuPIMSystolicWS::issue_ex_inst(Instruction inst) {
             assert(0);
         }
         // spdlog::info("COMPUTE Start cycle: {} inst:{}", _core_cycle, inst.repr());
-        parent_tile->stat.num_calculation += inst.tile_m * inst.tile_n * inst.tile_k;
+        // Fix integer overflow: cast to uint64_t before multiplication
+        parent_tile->stat.num_calculation += (uint64_t)inst.tile_m * inst.tile_n * inst.tile_k;
 
         if (inst.opcode == Opcode::GEMM_PRELOAD) {
             _stat_systolic_preload_issue_count++;
@@ -537,7 +540,8 @@ void NeuPIMSystolicWS::pim_issue_ex_inst(Instruction inst) {
             assert(0);
         }
         // spdlog::info("COMPUTE Start cycle: {} inst:{}", _core_cycle, inst.repr());
-        parent_tile->stat.num_calculation += inst.tile_m * inst.tile_n * inst.tile_k;
+        // Fix integer overflow: cast to uint64_t before multiplication
+        parent_tile->stat.num_calculation += (uint64_t)inst.tile_m * inst.tile_n * inst.tile_k;
 
         if (inst.opcode == Opcode::GEMM_PRELOAD) {
             _stat_systolic_preload_issue_count++;

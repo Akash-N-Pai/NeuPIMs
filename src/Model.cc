@@ -101,9 +101,9 @@ void Model::init_params() {
             // Calculate scaled expert FFN dimension based on scaling mode
             uint32_t d_ff_expert = _config.get_expert_ffn_dim();
             
-            spdlog::info("MoE FFN Scaling: mode='{}', d_ff_expert={} (dense d_ff={})",
+            spdlog::info("MoE FFN Scaling: mode='{}', d_ff_expert={} (base d_ff=4*d_model={})",
                          _config.moe_ffn_scaling, d_ff_expert, 
-                         4 * _config.model_n_embd / _config.n_tp);
+                         4 * _config.model_n_embd);
             
             // MoE: Create per-expert weights with scaled FFN dimension
             for (uint32_t expert_id = 0; expert_id < _config.num_experts; ++expert_id) {
@@ -150,7 +150,8 @@ void Model::init_params() {
         
         uint32_t d_model = _config.model_n_embd;
         uint32_t d_ff_expert = _config.get_expert_ffn_dim();
-        uint32_t d_ff_dense = 4 * d_model / _config.n_tp;
+        uint32_t d_ff_dense_with_tp = 4 * d_model / _config.n_tp;  // Dense with tensor parallelism
+        uint32_t d_ff_base = 4 * d_model;  // Base FFN width (no TP)
         
         // Per-layer parameter counts
         uint64_t attn_params = (d_model * 3 * d_model / _config.n_tp) + (d_model / _config.n_tp * d_model);
@@ -160,8 +161,8 @@ void Model::init_params() {
         uint64_t moe_ffn_params = router_params + all_experts_params;
         uint64_t layer_params = attn_params + moe_ffn_params;
         
-        // For comparison: dense FFN
-        uint64_t dense_ffn_params = 2 * d_model * d_ff_dense;
+        // For comparison: dense FFN (with TP applied)
+        uint64_t dense_ffn_params = 2 * d_model * d_ff_dense_with_tp;
         
         spdlog::info("Per-layer breakdown:");
         spdlog::info("  Attention: {:.2f}M params", attn_params / 1e6);
@@ -172,8 +173,10 @@ void Model::init_params() {
         spdlog::info("  Total layer: {:.2f}M params", layer_params / 1e6);
         spdlog::info("");
         spdlog::info("Comparison with dense FFN:");
-        spdlog::info("  Dense FFN: {:.2f}M params (d_ff={})", dense_ffn_params / 1e6, d_ff_dense);
-        spdlog::info("  MoE FFN ratio: {:.2f}×", (double)moe_ffn_params / dense_ffn_params);
+        spdlog::info("  Dense FFN (with TP={}): {:.2f}M params (d_ff={})", _config.n_tp, dense_ffn_params / 1e6, d_ff_dense_with_tp);
+        spdlog::info("  Base FFN (no TP): d_ff={}", d_ff_base);
+        spdlog::info("  MoE d_ff_expert formula: {} / {} = {}", d_ff_base, _config.num_experts, d_ff_expert);
+        spdlog::info("  MoE FFN ratio vs dense: {:.2f}×", (double)moe_ffn_params / dense_ffn_params);
         spdlog::info("");
         spdlog::info("Active parameters per token (top-{}):", _config.experts_per_token);
         uint64_t active_expert_params = expert_params * _config.experts_per_token;

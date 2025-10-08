@@ -41,3 +41,7 @@ systolic_ws_128x128_dev.json
     - rr: round-robin algorithm
     - clb: greedy min-load bin packing algorithm
 - Refer to `/trace-generator`. You can make your own trace corresponding the distribution of dataset (alpaca, share-gpt2)
+
+moe_ffn_scaling
+//d_ff_expert = 512 (compute) 
+//d_ff_expert = 256 (balanced) 

@@ -248,21 +248,23 @@ void initialize_client_config(std::string cli_config_path) {
 uint32_t SimulationConfig::get_expert_ffn_dim() const {
     if (!moe_enabled) return 4 * model_n_embd / n_tp;  // Dense FFN
     
-    uint32_t d_ff_dense = 4 * model_n_embd / n_tp;
+    // For MoE: d_ff_expert = (4 * d_model) / num_experts
+    // Note: We don't divide by n_tp for MoE experts
+    uint32_t d_ff_base = 4 * model_n_embd;
     
     if (moe_ffn_scaling == "balanced") {
         // Parameter-balanced: total params ≈ dense FFN params
-        return d_ff_dense / num_experts;
+        return d_ff_base / num_experts;
     } else if (moe_ffn_scaling == "compute") {
         // Compute-balanced: moderate scaling
-        return d_ff_dense / (uint32_t)std::sqrt(num_experts);
+        return d_ff_base / (uint32_t)std::sqrt(num_experts);
     } else if (moe_ffn_scaling == "capacity") {
         // Full capacity: each expert same width as dense FFN
-        return d_ff_dense;
+        return d_ff_base;
     } else {
         // Default to balanced
         spdlog::warn("Unknown moe_ffn_scaling '{}', defaulting to 'balanced'", moe_ffn_scaling);
-        return d_ff_dense / num_experts;
+        return d_ff_base / num_experts;
     }
 }
 

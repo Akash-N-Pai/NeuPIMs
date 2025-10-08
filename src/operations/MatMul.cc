@@ -66,8 +66,15 @@ std::vector<Ptr<BTensor>> MatMul::get_outputs(std::vector<Ptr<BTensor>> inputs) 
 
     auto larger_dim = input0_dims.size() > input1_dims.size() ? input0_dims : input1_dims;
     std::vector<uint32_t> output_dims(larger_dim.begin(), larger_dim.end());
-    *(output_dims.rbegin() + 1) =
-        *(input0_dims.rbegin() + 1);                // Set (M, x) in matmul (M, K) x (K, N).
+    
+    // MoE token slicing: Use override if specified
+    if (_use_row_override) {
+        *(output_dims.rbegin() + 1) = _row_count_override;  // Override M dimension
+        spdlog::info("MatMul using row override: processing {} rows (instead of {})", 
+                     _row_count_override, *(input0_dims.rbegin() + 1));
+    } else {
+        *(output_dims.rbegin() + 1) = *(input0_dims.rbegin() + 1);  // Set (M, x) in matmul (M, K) x (K, N).
+    }
     *output_dims.rbegin() = *input1_dims.rbegin();  // Set (x, N) in matmul (M, K) x (K, N)
     spdlog::info("MatMul output sz: {}", output_dims);
 
@@ -385,7 +392,14 @@ void MatMul::calculate_loops() {
     _inner_loop.resize(3);  // M, K, N
 
     // _inner_loop[0]: [b, l, E] -> l. [b, h, l, d_k] -> l.
-    _inner_loop[0] = input0_dims[input0_dims.size() - 2];
+    // MoE token slicing: Use row override if specified
+    if (_use_row_override) {
+        _inner_loop[0] = _row_count_override;  // Process only assigned tokens
+        spdlog::info("MatMul loop calculation: using row override M={} (original={})", 
+                     _row_count_override, input0_dims[input0_dims.size() - 2]);
+    } else {
+        _inner_loop[0] = input0_dims[input0_dims.size() - 2];
+    }
     _inner_loop[1] = input0_dims.back();
     _inner_loop[2] = input1_dims.back();
 
