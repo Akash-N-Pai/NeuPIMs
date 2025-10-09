@@ -341,22 +341,47 @@ std::vector<Ptr<BTensor>> StageProgram::moe_ffn_block(std::vector<Ptr<BTensor>> 
     auto router_logits = get_outputs(router_matmul, std::vector<Ptr<BTensor>>{normalized_input[0], 
                                                                                  _model->find_tensor(name_gen(prefix, OperationType::MoERouter, ParameterType::Weight))});
     
-    // Generate realistic token-to-expert assignments with load imbalance
+    // Generate token-to-expert assignments
+    // Option 1: Use routing trace file (if provided)
+    // Option 2: Fall back to simulated distribution
     uint32_t num_experts = Config::global_config.num_experts;
     uint32_t experts_per_token = Config::global_config.experts_per_token;
     uint32_t batch_size = normalized_input[0]->get_dims()[0];
     uint32_t E = normalized_input[0]->get_dims()[1];
     
-    bool enable_imbalance = Config::global_config.expert_load_imbalance;
-    double skew_factor = Config::global_config.expert_load_skew;
+    std::vector<uint32_t> expert_token_counts;
+    std::vector<std::vector<uint32_t>> expert_token_assignments;
     
-    MoETokenDispatcher dispatcher(num_experts, experts_per_token, batch_size,
-                                  enable_imbalance, skew_factor);
-    auto expert_token_counts = dispatcher.get_expert_token_counts();
-    auto expert_token_assignments = dispatcher.get_expert_token_assignments();
-    
-    // Print realistic load distribution
-    dispatcher.print_distribution();
+    // Try to load from trace file first
+    std::string trace_path = Config::global_config.moe_routing_trace_path;
+    if (!trace_path.empty()) {
+        MoERoutingTraceReader trace_reader(trace_path, num_experts, experts_per_token, batch_size);
+        if (trace_reader.has_trace()) {
+            // Use actual routing from trace file
+            expert_token_counts = trace_reader.get_expert_token_counts(0);  // layer 0
+            expert_token_assignments = trace_reader.get_expert_token_assignments(0);
+            trace_reader.print_distribution(0);
+        } else {
+            // Fall back to simulated distribution
+            spdlog::info("Falling back to simulated token distribution");
+            bool enable_imbalance = Config::global_config.expert_load_imbalance;
+            double skew_factor = Config::global_config.expert_load_skew;
+            MoETokenDispatcher dispatcher(num_experts, experts_per_token, batch_size,
+                                          enable_imbalance, skew_factor);
+            expert_token_counts = dispatcher.get_expert_token_counts();
+            expert_token_assignments = dispatcher.get_expert_token_assignments();
+            dispatcher.print_distribution();
+        }
+    } else {
+        // No trace path specified - use simulated distribution
+        bool enable_imbalance = Config::global_config.expert_load_imbalance;
+        double skew_factor = Config::global_config.expert_load_skew;
+        MoETokenDispatcher dispatcher(num_experts, experts_per_token, batch_size,
+                                      enable_imbalance, skew_factor);
+        expert_token_counts = dispatcher.get_expert_token_counts();
+        expert_token_assignments = dispatcher.get_expert_token_assignments();
+        dispatcher.print_distribution();
+    }
     
     // Create MoE execution planner with optimizations
     MoEExecution moe_exec(num_experts, Config::global_config.expert_cache_size);

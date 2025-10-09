@@ -158,6 +158,7 @@ SimulationConfig initialize_config(json config) {
     parsed_config.core_freq = config["core_freq"];
     parsed_config.core_width = config["core_width"];
     parsed_config.core_height = config["core_height"];
+    parsed_config.systolic_array_count = config.value("systolic_array_count", 1);
 
     /* Vector configs */
     parsed_config.process_bit = config["process_bit"];
@@ -292,6 +293,7 @@ void initialize_model_config(std::string model_config_path) {
     Config::global_config.expert_cache_size = model_config.value("expert_cache_size", 8);
     Config::global_config.moe_enable_parallelism = model_config.value("moe_enable_parallelism", true);
     Config::global_config.moe_enable_double_buffering = model_config.value("moe_enable_double_buffering", true);
+    Config::global_config.moe_routing_trace_path = model_config.value("moe_routing_trace_path", std::string(""));
 }
 void initialize_system_config(std::string sys_config_path) {
     json sys_config = load_config(sys_config_path);

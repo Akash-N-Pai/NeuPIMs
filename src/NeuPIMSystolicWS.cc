@@ -303,7 +303,8 @@ void NeuPIMSystolicWS::update_stats() {
             assert(0);
         }
         parent_tile->stat.compute_cycles++;
-        _stat.back().num_calculations += 128 * 8 * 2;  // apply systolic array count
+        // Systolic array throughput per cycle = width × height × 2 (MAC operations)
+        _stat.back().num_calculations += _config.core_width * _config.core_height * 2;
     }
     for (auto &vector_pipeline : _vector_pipelines) {
         if (!vector_pipeline.empty()) {
@@ -312,7 +313,8 @@ void NeuPIMSystolicWS::update_stats() {
                 assert(0);
             }
             parent_tile->stat.compute_cycles++;
-            _stat.back().num_calculations += 16;  // apply systolic array count
+            // Vector unit throughput per cycle = vector_core_width
+            _stat.back().num_calculations += _config.vector_core_width;
         }
     }
 

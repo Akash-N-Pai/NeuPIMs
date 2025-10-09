@@ -18,6 +18,7 @@
     "expert_load_latency": 5000,
     "expert_cache_size": 8,
     "moe_enable_parallelism": true,
-    "moe_enable_double_buffering": true
+    "moe_enable_double_buffering": true,
+    "moe_routing_trace_path": ""
 }
 

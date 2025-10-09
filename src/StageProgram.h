@@ -7,6 +7,7 @@
 #include "Logger.h"
 #include "Model.h"
 #include "MoETokenDispatcher.h"
+#include "MoERoutingTraceReader.h"
 #include "MoEExecution.h"
 #include "Stat.h"
 #include "operations/Operation.h"

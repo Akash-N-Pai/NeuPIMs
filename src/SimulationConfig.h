@@ -38,6 +38,7 @@ struct SimulationConfig {
     uint32_t expert_cache_size;  // Number of experts that fit in on-chip cache
     bool moe_enable_parallelism; // Enable parallel expert execution
     bool moe_enable_double_buffering; // Overlap param load and compute
+    std::string moe_routing_trace_path;  // Optional: path to expert routing trace file
     
     // Helper function to calculate scaled expert FFN dimension
     uint32_t get_expert_ffn_dim() const;  // Implemented in Common.cc
@@ -59,6 +60,7 @@ struct SimulationConfig {
     uint32_t core_freq;
     uint32_t core_width;
     uint32_t core_height;
+    uint32_t systolic_array_count;  // Number of systolic arrays per core
 
     uint32_t n_tp;
 

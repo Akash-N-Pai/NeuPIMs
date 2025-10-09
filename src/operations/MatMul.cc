@@ -330,8 +330,9 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                 tile.instructions.push_back(Instruction{
                     .opcode = (m_inner_offset == 0 ? Opcode::GEMM_PRELOAD : Opcode::GEMM),
                     .dest_addr = sram_accumulation_offset,
-                    // xxx : fixed to systolic array size 8
-                    .size = loop_size / 8,
+                    // Size for systolic array: loop_size / systolic_array_count
+                    // Represents how the workload is distributed across multiple arrays
+                    .size = loop_size / std::max(1u, _config.systolic_array_count),
                     // what does src_addrs do in computation instructions?
                     // read Core::can_issue_compute.
                     // checks if it's loaded to sram.
