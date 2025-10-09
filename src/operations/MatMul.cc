@@ -96,11 +96,48 @@ void MatMul::initialize_tiles() {
     // Here, B does not refer to batch_size,
     // but rather to the outer dimensions of the tensor in matmul,
     // such as b*h in [b, h, l, d_k].
-    for (uint32_t B = 0; B < _prod_batches; ++B) {
-        for (uint32_t M = 0; M < _outer_loop[0]; ++M) {
-            for (uint32_t N = 0; N < _outer_loop[2]; ++N) {
+    
+    // OPTIMIZATION: Adaptive loop ordering based on dimension sizes
+    // When K dimension dominates (e.g., FC2 with K=4096), reorder loops to
+    // improve data reuse by moving K to middle position where it has better locality
+    //
+    // Standard order: M → N → K (innermost) - good when M or N is large
+    // Optimized order: M → K → N (innermost) - better when K is large
+    //
+    // Decision: If K > 2 * max(M,N), use optimized order
+    
+    uint32_t m_tiles = _outer_loop[0];
+    uint32_t k_tiles = _outer_loop[1];
+    uint32_t n_tiles = _outer_loop[2];
+    
+    bool use_k_optimized_order = (k_tiles > 2 * std::max(m_tiles, n_tiles));
+    
+    if (use_k_optimized_order) {
+        spdlog::info("MatMul LOOP OPTIMIZATION: K-tiles ({}) >> M-tiles ({}) and N-tiles ({})",
+                    k_tiles, m_tiles, n_tiles);
+        spdlog::info("  Using K-optimized loop order: M → K → N (innermost) for better data reuse");
+        
+        // K-optimized order: iterate M → K → N
+        for (uint32_t B = 0; B < _prod_batches; ++B) {
+            for (uint32_t M = 0; M < _outer_loop[0]; ++M) {
                 for (uint32_t K = 0; K < _outer_loop[1]; ++K) {
-                    _tiles.push_back(initialize_instructions(B, M, K, N, K + 1 == _outer_loop[1]));
+                    for (uint32_t N = 0; N < _outer_loop[2]; ++N) {
+                        // Still accumulate over K, store after last K iteration
+                        _tiles.push_back(initialize_instructions(B, M, K, N, K + 1 == _outer_loop[1]));
+                    }
+                }
+            }
+        }
+    } else {
+        spdlog::info("MatMul: Using standard loop order: M → N → K (innermost)");
+        
+        // Standard order: iterate M → N → K
+        for (uint32_t B = 0; B < _prod_batches; ++B) {
+            for (uint32_t M = 0; M < _outer_loop[0]; ++M) {
+                for (uint32_t N = 0; N < _outer_loop[2]; ++N) {
+                    for (uint32_t K = 0; K < _outer_loop[1]; ++K) {
+                        _tiles.push_back(initialize_instructions(B, M, K, N, K + 1 == _outer_loop[1]));
+                    }
                 }
             }
         }
@@ -224,9 +261,13 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                     (m_inner_offset * n_inner + n_inner_offset) * _config.precision;
 
                 // -- activation --
+                // FIX: Always recalculate tile_m and tile_k for accurate NumCalculation
+                // Previously these were only calculated when n_inner_offset==0, causing
+                // incorrect reuse of tile dimensions across iterations
+                tile_m = 0;
+                tile_k = 0;
+                
                 if (n_inner_offset == 0) {
-                    tile_m = 0;
-                    tile_k = 0;
                     // During the n_inner tile iterations (to prevent duplication),
                     // add the MOVIN instruction only in the first inner loop.
                     std::vector<addr_type> activation_addrs;
@@ -269,10 +310,27 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                             .src_addrs = std::move(activation_addrs),
                             .operand_id = _INPUT_OPERAND});
                     }
+                } else {
+                    // n_inner_offset != 0: No MOVIN, but still need to calculate tile_m, tile_k
+                    // for accurate operation counting
+                    for (int m_loop = 0; m_loop < loop_size; m_loop++) {
+                        for (int k_loop = 0; k_loop < loop_size; k_loop++) {
+                            std::vector<uint32_t> activation_indexes(batch_index);
+                            activation_indexes.push_back(m_outer_offset + m_inner_offset + m_loop);
+                            activation_indexes.push_back(k_outer_offset + k_inner_offset + k_loop);
+                            auto activation_addr = activation_tensor->get_addr(activation_indexes);
+                            if (activation_addr != GARBAGE_ADDR) {
+                                tile_m = m_loop + 1;
+                                tile_k = k_loop + 1;
+                            }
+                        }
+                    }
                 }
                 // -- weight --
+                // FIX: Always recalculate tile_n for accurate NumCalculation
+                tile_n = 0;
+                
                 if (m_inner_offset == 0) {
-                    tile_n = 0;
                     // During the m_inner tile iterations (to prevent duplication),
                     // add the MOVIN instruction only in the first inner loop.
                     std::vector<addr_type> weight_addrs;
@@ -317,6 +375,20 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                             .src_addrs = std::move(weight_addrs),
                             .operand_id = _INPUT_OPERAND + 1,
                         });
+                    }
+                } else {
+                    // m_inner_offset != 0: No MOVIN, but still need to calculate tile_n
+                    // for accurate operation counting
+                    for (int k_loop = 0; k_loop < loop_size; k_loop++) {
+                        for (int n_loop = 0; n_loop < loop_size; n_loop++) {
+                            std::vector<uint32_t> weight_indexes(batch_index);
+                            weight_indexes.push_back(k_outer_offset + k_inner_offset + k_loop);
+                            weight_indexes.push_back(n_outer_offset + n_inner_offset + n_loop);
+                            auto weight_addr = weight_tensor->get_addr(weight_indexes);
+                            if (weight_addr != GARBAGE_ADDR) {
+                                tile_n = n_loop + 1;
+                            }
+                        }
                     }
                 }
                 // spdlog::info("{} {} {}", activation_tensor->get_dims(),
@@ -394,15 +466,22 @@ void MatMul::calculate_loops() {
 
     // _inner_loop[0]: [b, l, E] -> l. [b, h, l, d_k] -> l.
     // MoE token slicing: Use row override if specified
+    uint32_t effective_m;
     if (_use_row_override) {
-        _inner_loop[0] = _row_count_override;  // Process only assigned tokens
+        effective_m = _row_count_override;  // Process only assigned tokens
         spdlog::info("MatMul loop calculation: using row override M={} (original={})", 
                      _row_count_override, input0_dims[input0_dims.size() - 2]);
     } else {
-        _inner_loop[0] = input0_dims[input0_dims.size() - 2];
+        effective_m = input0_dims[input0_dims.size() - 2];
     }
+    
+    _inner_loop[0] = effective_m;
     _inner_loop[1] = input0_dims.back();
     _inner_loop[2] = input1_dims.back();
+
+    uint32_t m_dim = effective_m;
+    uint32_t k_dim = input0_dims.back();
+    uint32_t n_dim = input1_dims.back();
 
     _outer_loop.assign(3, 1);
 
@@ -430,6 +509,54 @@ void MatMul::calculate_loops() {
         *max_el = ((*max_el) & 1) + ((*max_el) >> 1);  // ceil(*max_el / 2)
     }
 
+    // OPTIMIZATION: Intelligently choose transpose to maximize data reuse
+    // The loop structure is: for n in _inner_loop[2]: for k in _inner_loop[1]: for m in _inner_loop[0] (innermost)
+    //
+    // Data reuse analysis:
+    // - Innermost loop (_inner_loop[0]) has best data reuse - maximize this dimension
+    // - Middle loop (_inner_loop[1]) has moderate reuse
+    // - Outermost loop (_inner_loop[2]) has worst reuse
+    //
+    // Original: _inner_loop = [M, K, N]
+    // With transpose: _inner_loop = [N, K, M] (standard reverse)
+    //
+    // Strategy: Choose transpose on/off to maximize the innermost dimension
+    // - Without transpose: innermost = M
+    // - With transpose: innermost = N
+    // Choose whichever is larger for better data reuse
+    
+    if (_is_transposed) {
+        // Compare M vs N to decide transpose
+        // Transpose if N > M (so N becomes innermost), otherwise keep M innermost
+        bool should_transpose = (n_dim > m_dim);
+        
+        if (!should_transpose) {
+            // M is larger or equal, keep it innermost
+            spdlog::info("MatMul OPTIMIZATION: Disabling transpose for better data reuse. "
+                        "M={} >= N={}, K={} → keeping M innermost",
+                        m_dim, n_dim, k_dim);
+            _is_transposed = false;
+        } else {
+            // N is larger, transpose to make it innermost
+            spdlog::info("MatMul OPTIMIZATION: Using transpose for better data reuse. "
+                        "N={} > M={}, K={} → making N innermost",
+                        n_dim, m_dim, k_dim);
+        }
+        
+        // Calculate and log expected performance impact
+        uint32_t innermost_dim = should_transpose ? n_dim : m_dim;
+        uint32_t outermost_dim = should_transpose ? m_dim : n_dim;
+        uint32_t innermost_tiles = (innermost_dim + _config.core_width - 1) / _config.core_width;
+        uint32_t outermost_tiles = (outermost_dim + _config.core_width - 1) / _config.core_width;
+        
+        spdlog::info("  Loop structure: {} outermost tiles × {} K tiles × {} innermost tiles",
+                    outermost_tiles, 
+                    (k_dim + _config.core_width - 1) / _config.core_width,
+                    innermost_tiles);
+        spdlog::info("  Data reuse factor: {} (innermost tiles can reuse same data)",
+                    innermost_tiles);
+    }
+    
     if (_is_transposed) {
         std::reverse(_inner_loop.begin(), _inner_loop.end());
         std::reverse(_outer_loop.begin(), _outer_loop.end());
