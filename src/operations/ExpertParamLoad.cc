@@ -28,9 +28,9 @@ void ExpertParamLoad::calculate_load_cycles() {
     
     uint64_t param_bytes = _param_size_bytes;
     
-    // Transfer latency calculation using interconnect bandwidth
-    // Interconnect connects NPU cores to DRAM (NOT HBM2 bandwidth - that's for PIM)
-    uint32_t icnt_bandwidth_gbps = 64;  // 256-bit wide @ 2000 MHz
+    // Transfer latency calculation using PCIe bandwidth
+    // Models expert weight transfer from host memory to NPU device memory via PCIe
+    uint32_t icnt_bandwidth_gbps = 32;  // PCIe Gen4 x16 (~31.5 GB/s sustained)
     uint32_t core_freq_mhz = _config.core_freq;  // 1000 MHz
     
     // Bytes per cycle at core frequency
