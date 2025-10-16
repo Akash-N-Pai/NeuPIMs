@@ -36,8 +36,8 @@
 #include "helper/HelperFunctions.h"
 #include "nlohmann/json.hpp"
 
-#define SPAD_BASE 0x10000000
-#define ACCUM_SPAD_BASE 0x20000000
+#define SPAD_BASE 0x80000000
+#define ACCUM_SPAD_BASE 0x90000000
 #define GARBAGE_ADDR 0xFFFFFFFFFFFFFFF
 #define KB *1024
 

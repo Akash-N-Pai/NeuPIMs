@@ -302,6 +302,15 @@ void NeuPIMSystolicWS::update_stats() {
         if (parent_tile == nullptr) {
             assert(0);
         }
+        
+        // DEBUG: Log every 1000 cycles to trace execution
+        if (parent_tile->stat.compute_cycles % 1000 == 0) {
+            spdlog::info("[COMPUTE_DEBUG] Cycle {}: compute_cycles={}, pipeline_size={}, inst.finish={}",
+                        _core_cycle, parent_tile->stat.compute_cycles, 
+                        _compute_pipeline.size(),
+                        _compute_pipeline.front().finish_cycle);
+        }
+        
         parent_tile->stat.compute_cycles++;
         // Systolic array throughput per cycle = width × height × 2 (MAC operations)
         _stat.back().num_calculations += _config.core_width * _config.core_height * 2;
@@ -433,6 +442,17 @@ void NeuPIMSystolicWS::issue_ex_inst(Instruction inst) {
             assert(0);
         }
         // spdlog::info("COMPUTE Start cycle: {} inst:{}", _core_cycle, inst.repr());
+        
+        // DEBUG: Log instruction details
+        static int gemm_count = 0;
+        if (gemm_count < 10 || gemm_count % 100 == 0) {
+            spdlog::info("[GEMM_DEBUG #{}] opcode={}, tile_m={}, tile_n={}, tile_k={}, size={}, cycles={}",
+                        gemm_count, (inst.opcode == Opcode::GEMM ? "GEMM" : "GEMM_PRELOAD"),
+                        inst.tile_m, inst.tile_n, inst.tile_k, inst.size,
+                        254 + std::max((int)inst.size, 4));
+        }
+        gemm_count++;
+        
         // Fix integer overflow: cast to uint64_t before multiplication
         parent_tile->stat.num_calculation += (uint64_t)inst.tile_m * inst.tile_n * inst.tile_k;
 

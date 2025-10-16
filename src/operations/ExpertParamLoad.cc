@@ -3,7 +3,7 @@
 ExpertParamLoad::ExpertParamLoad(std::string name, uint32_t expert_id,
                                  std::vector<Ptr<NPUTensor>> expert_weights,
                                  Ptr<BTensor> data_tensor)
-    : Operation(name), _expert_id(expert_id), _data_tensor(data_tensor) {
+    : Operation(name), _expert_id(expert_id), _data_tensor(data_tensor), _expert_weights(expert_weights) {
     
     // Calculate total parameter size for this expert
     // FC1 + FC2 weights (bias is small, ignored)
@@ -80,20 +80,16 @@ void ExpertParamLoad::initialize_tiles() {
         .accum = false,
     };
     
-    // Use DUMMY instruction with size = _load_cycles
-    // The modified DUMMY opcode will return this as the cycle count
-    // This properly injects the parameter load latency into the timeline
+    // Model parameter load latency using DUMMY instruction
+    // This adds the transfer overhead to the simulation timeline
     tile.instructions.push_back(Instruction{
         .opcode = Opcode::DUMMY,
         .dest_addr = ACCUM_SPAD_BASE,
-        .size = _load_cycles,  // DUMMY will use this as cycle count
-        .src_addrs = std::vector<addr_type>{},  // No memory access needed
+        .size = _load_cycles,  // Models the parameter transfer latency
+        .src_addrs = std::vector<addr_type>{},
     });
     
     _tiles.push_back(tile);
-    
-    spdlog::info("ExpertParamLoad {}: {} bytes, {} cycles overhead", 
-                 _expert_id, _param_size_bytes, _load_cycles);
 }
 
 Tile ExpertParamLoad::initialize_instructions() {

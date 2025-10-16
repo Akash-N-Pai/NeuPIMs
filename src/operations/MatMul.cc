@@ -277,21 +277,10 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                             activation_indexes.push_back(m_outer_offset + m_inner_offset + m_loop);
                             activation_indexes.push_back(k_outer_offset + k_inner_offset + k_loop);
                             auto activation_addr = activation_tensor->get_addr(activation_indexes);
-                            // xxx is it ok to validate with garbage_addr?
                             if (activation_addr != GARBAGE_ADDR) {
-                                // save maximum tile_m, tile_k value
                                 tile_m = m_loop + 1;
                                 tile_k = k_loop + 1;
-                                // activation_addrs.push_back(AddressConfig::switch_co_ch(act_addr));
-                                // act_addr += 2;  // precision
                                 activation_addrs.push_back(activation_addr);
-                                // spdlog::info("index in range. target tensor dimension: {}, "
-                                //              "access index {}",
-                                //              activation_tensor->get_dims(), activation_indexes);
-                            } else {
-                                // spdlog::info("index out of range. target tensor dimension: {}, "
-                                //              "access index {}",
-                                //              activation_tensor->get_dims(), activation_indexes);
                             }
                         }
                     }
@@ -310,7 +299,7 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                             .src_addrs = std::move(activation_addrs),
                             .operand_id = _INPUT_OPERAND});
                     }
-                } else {
+                } else{
                     // n_inner_offset != 0: No MOVIN, but still need to calculate tile_m, tile_k
                     // for accurate operation counting
                     for (int m_loop = 0; m_loop < loop_size; m_loop++) {
@@ -364,15 +353,6 @@ Tile MatMul::initialize_instructions(uint32_t B, uint32_t M, uint32_t K, uint32_
                             if (weight_addr != GARBAGE_ADDR) {
                                 tile_n = n_loop + 1;
                                 weight_addrs.push_back(weight_addr);
-                                // spdlog::info(
-                                //     "index in range. target tensor dimension: {}, "
-                                //     "access index {}",
-                                //     weight_tensor->get_dims(), weight_indexes);
-                            } else {
-                                // spdlog::info(
-                                //     "index out of range. target tensor dimension: {}, "
-                                //     "access index {}",
-                                //     weight_tensor->get_dims(), weight_indexes);
                             }
                         }
                     }

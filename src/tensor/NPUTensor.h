@@ -27,4 +27,8 @@ class NPUTensor : public BTensor {
     std::vector<Ptr<NPUTensorInner>> _inners;
 
     bool _is_transposed;
+    
+    // SRAM pre-loading support for MoE expert weights
+    bool _sram_loaded = false;        // True if this tensor is pre-loaded in SRAM
+    addr_type _sram_base_addr = 0;    // Base SRAM address if pre-loaded
 };

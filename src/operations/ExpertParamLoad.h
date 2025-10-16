@@ -31,6 +31,7 @@ class ExpertParamLoad : public Operation {
     uint64_t _param_size_bytes;  // Total parameter size to load
     uint32_t _load_cycles;       // Cycles needed for transfer
     Ptr<BTensor> _data_tensor;   // The data tensor to pass through (normalized_input)
+    std::vector<Ptr<NPUTensor>> _expert_weights;  // Store expert weights
     
     void calculate_load_cycles();
     void initialize_tiles();

@@ -69,6 +69,12 @@ void StageProgram::init_SA_program() {
     bool lets_proj_ffns = enable_proj_ffns();
     bool lets_qkvgen = enable_qkv_gen();
 
+    // OVERRIDE: For Stage E with MoE, increase batch size to 2048 tokens
+    if (_stage == Stage::E && Config::global_config.moe_enabled) {
+        N = 2048;  // Override to 2048 tokens for entire Stage E
+        spdlog::info("Stage E MoE batch override: {} → {} tokens", _breq->get_num_rows(), N);
+    }
+
     std::vector<uint32_t> input_dim{N, E};
     if (lets_proj_ffns) {
         input_dim[1] /= Config::global_config.n_tp;
@@ -240,8 +246,9 @@ void StageProgram::log() {
 }
 
 std::vector<Ptr<BTensor>> StageProgram::projection_block(std::vector<Ptr<BTensor>> inputs) {
-    auto N = _breq->get_num_rows();
-    auto E = Config::global_config.model_n_embd;
+    // Use the actual input dimensions (which may be overridden for Stage E)
+    auto N = inputs[0]->get_dims()[0];
+    auto E = inputs[0]->get_dims()[1];
 
     std::vector<uint32_t> input_dim{N, E};
     auto res_buf =
