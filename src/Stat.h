@@ -354,9 +354,14 @@ typedef struct OperationStat {
             case StatType::NumCalculation:
                 return std::to_string(num_calculation);
             case StatType::NpuUtilization:
+                // NPU utilization = actual MACs / peak possible MACs
+                // Peak MACs per cycle = systolic_array_count × core_width × core_height × 2
+                // (×2 because MAC = multiply + accumulate)
                 npu_util = (double)num_calculation /
-                           (double)(compute_cycles * Config::global_config.core_width *
-                                    Config::global_config.core_height);
+                           (double)(compute_cycles * 
+                                    Config::global_config.systolic_array_count *
+                                    Config::global_config.core_width *
+                                    Config::global_config.core_height * 2);
                 return std::to_string(npu_util);
             default:
                 assert(0);
